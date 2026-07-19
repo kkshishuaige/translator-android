@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <style name="Theme.Translator" parent="Theme.MaterialComponents.DayNight.DarkActionBar">
+        <item name="colorPrimary">#4A9EFF</item>
+        <item name="colorPrimaryVariant">#3A8EEF</item>
+        <item name="colorOnPrimary">#FFFFFF</item>
+        <item name="colorSecondary">#4AEF4A</item>
+        <item name="android:statusBarColor">#0F0F13</item>
+        <item name="android:navigationBarColor">#0F0F13</item>
+    </style>
+</resources>

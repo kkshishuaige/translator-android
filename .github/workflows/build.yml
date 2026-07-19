@@ -1,0 +1,50 @@
+name: Build APK
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+
+      - name: Setup Gradle and generate wrapper
+        run: |
+          # 生成 gradle wrapper（如果没有的话）
+          apt-get update -qq && apt-get install -y -qq gradle 2>/dev/null || true
+          cd ${{ github.workspace }}
+          gradle wrapper --gradle-version 8.5 2>/dev/null || true
+          if [ ! -f gradlew ]; then
+            echo "Downloading gradlew..."
+            curl -sL "https://services.gradle.org/distributions/gradle-8.5-bin.zip" -o /tmp/gradle.zip
+            unzip -q /tmp/gradle.zip -d /tmp/gradle
+            /tmp/gradle/gradle-8.5/bin/gradle wrapper
+          fi
+          chmod +x gradlew
+
+      - name: Build APK
+        run: |
+          ./gradlew assembleRelease || ./gradlew assembleDebug
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: translator-apk
+          path: |
+            app/build/outputs/apk/release/*.apk
+            app/build/outputs/apk/debug/*.apk
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        if: startsWith(github.ref, 'refs/tags/')
+        with:
+          files: app/build/outputs/apk/release/*.apk
