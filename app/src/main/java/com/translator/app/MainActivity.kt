@@ -153,7 +153,7 @@ class MainActivity : AppCompatActivity() {
                 val msg = when (error) {
                     SpeechRecognizer.ERROR_NO_MATCH -> "未识别到语音"
                     SpeechRecognizer.ERROR_SPEECH_TIMEOUT -> "没有说话"
-                    SpeechRecognizer.ERROR_RECORDING_AUDIO -> "录音错误"
+                    SpeechRecognizer.ERROR_AUDIO -> "录音错误"
                     SpeechRecognizer.ERROR_NETWORK -> "网络错误"
                     else -> "错误: $error"
                 }
