@@ -17,34 +17,51 @@ jobs:
           java-version: '17'
           distribution: 'temurin'
 
-      - name: Setup Gradle and generate wrapper
-        run: |
-          # 生成 gradle wrapper（如果没有的话）
-          apt-get update -qq && apt-get install -y -qq gradle 2>/dev/null || true
-          cd ${{ github.workspace }}
-          gradle wrapper --gradle-version 8.5 2>/dev/null || true
-          if [ ! -f gradlew ]; then
-            echo "Downloading gradlew..."
-            curl -sL "https://services.gradle.org/distributions/gradle-8.5-bin.zip" -o /tmp/gradle.zip
-            unzip -q /tmp/gradle.zip -d /tmp/gradle
-            /tmp/gradle/gradle-8.5/bin/gradle wrapper
-          fi
-          chmod +x gradlew
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v3
 
-      - name: Build APK
+      - name: Generate gradle wrapper
         run: |
-          ./gradlew assembleRelease || ./gradlew assembleDebug
+          if [ ! -f gradlew ]; then
+            apt-get update -qq && apt-get install -y -qq gradle 2>/dev/null || true
+            gradle wrapper --gradle-version 8.5 2>/dev/null || true
+            if [ ! -f gradlew ]; then
+              curl -sL "https://services.gradle.org/distributions/gradle-8.5-bin.zip" -o /tmp/gradle.zip
+              unzip -q /tmp/gradle.zip -d /tmp/gradle
+              /tmp/gradle/gradle-8.5/bin/gradle wrapper
+            fi
+            chmod +x gradlew
+          fi
+
+      - name: Build Debug APK
+        run: |
+          ./gradlew assembleDebug
+
+      - name: Align and sign APK
+        run: |
+          # zipalign 和 apksigner 来确保兼容性
+          APK=$(find app/build/outputs/apk/debug -name "*.apk" | head -1)
+          if [ -n "$APK" ]; then
+            # 对齐
+            ${ANDROID_HOME}/build-tools/*/zipalign -f -v 4 "$APK" app-debug-aligned.apk 2>/dev/null || \
+              zipalign -f -v 4 "$APK" app-debug-aligned.apk 2>/dev/null || \
+              cp "$APK" app-debug-aligned.apk
+            # 用 debug key 签名（确保 v1+v2 签名方案）
+            if [ -f ~/.android/debug.keystore ]; then
+              apksigner sign --ks ~/.android/debug.keystore \
+                --ks-key-alias androiddebugkey \
+                --ks-pass pass:android \
+                --v1-signing-enabled true \
+                --v2-signing-enabled true \
+                --v3-signing-enabled false \
+                app-debug-aligned.apk 2>/dev/null || true
+            fi
+            cp app-debug-aligned.apk app/build/outputs/apk/debug/
+          fi
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
           name: translator-apk
           path: |
-            app/build/outputs/apk/release/*.apk
             app/build/outputs/apk/debug/*.apk
-
-      - name: Create Release
-        uses: softprops/action-gh-release@v2
-        if: startsWith(github.ref, 'refs/tags/')
-        with:
-          files: app/build/outputs/apk/release/*.apk
