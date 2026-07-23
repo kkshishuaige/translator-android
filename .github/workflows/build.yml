@@ -23,9 +23,9 @@ jobs:
       - name: Generate gradle wrapper
         run: |
           if [ ! -f gradlew ]; then
-            curl -sL "https://services.gradle.org/distributions/gradle-8.7-bin.zip" -o /tmp/gradle.zip
+            curl -sL "https://services.gradle.org/distributions/gradle-8.9-bin.zip" -o /tmp/gradle.zip
             unzip -q /tmp/gradle.zip -d /tmp/gradle
-            /tmp/gradle/gradle-8.7/bin/gradle wrapper --gradle-version 8.7
+            /tmp/gradle/gradle-8.9/bin/gradle wrapper --gradle-version 8.9
             chmod +x gradlew
           fi
 
