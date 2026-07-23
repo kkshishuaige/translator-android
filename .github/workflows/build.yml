@@ -1,4 +1,4 @@
-name: Build APK
+name: Build APK with Gemma 4
 
 on:
   push:
@@ -37,31 +37,9 @@ jobs:
         run: |
           ./gradlew assembleDebug
 
-      - name: Align and sign APK
-        run: |
-          # zipalign 和 apksigner 来确保兼容性
-          APK=$(find app/build/outputs/apk/debug -name "*.apk" | head -1)
-          if [ -n "$APK" ]; then
-            # 对齐
-            ${ANDROID_HOME}/build-tools/*/zipalign -f -v 4 "$APK" app-debug-aligned.apk 2>/dev/null || \
-              zipalign -f -v 4 "$APK" app-debug-aligned.apk 2>/dev/null || \
-              cp "$APK" app-debug-aligned.apk
-            # 用 debug key 签名（确保 v1+v2 签名方案）
-            if [ -f ~/.android/debug.keystore ]; then
-              apksigner sign --ks ~/.android/debug.keystore \
-                --ks-key-alias androiddebugkey \
-                --ks-pass pass:android \
-                --v1-signing-enabled true \
-                --v2-signing-enabled true \
-                --v3-signing-enabled false \
-                app-debug-aligned.apk 2>/dev/null || true
-            fi
-            cp app-debug-aligned.apk app/build/outputs/apk/debug/
-          fi
-
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: translator-apk
+          name: translator-apk-gemma4
           path: |
             app/build/outputs/apk/debug/*.apk

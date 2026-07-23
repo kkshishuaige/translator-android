@@ -1,6 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:id="@+id/scrollView"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
     android:background="#0F0F13"
@@ -25,7 +26,7 @@
             android:layout_height="wrap_content"
             android:layout_gravity="center"
             android:layout_marginTop="4dp"
-            android:text="安卓原生语音识别"
+            android:text="Gemma 4 本地端到端 · 6种语言互译"
             android:textColor="#888888"
             android:textSize="14sp" />
 
@@ -69,18 +70,28 @@
             android:layout_marginTop="20dp"
             android:backgroundTint="#4A9EFF"
             android:paddingHorizontal="40dp"
-            android:text="🎤 按住说话"
+            android:text="🎤 开始同传"
             android:textColor="#FFFFFF"
             android:textSize="16sp"
             android:textStyle="bold" />
 
         <TextView
+            android:id="@+id/modelStatusText"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:gravity="center"
+            android:text="⏳ 初始化 Gemma 4 模型…"
+            android:textColor="#FFA500"
+            android:textSize="12sp" />
+
+        <TextView
             android:id="@+id/statusText"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_marginTop="12dp"
+            android:layout_marginTop="4dp"
             android:gravity="center"
-            android:text="就绪"
+            android:text=""
             android:textColor="#888888"
             android:textSize="13sp" />
 
@@ -115,7 +126,8 @@
                     android:hint="识别文字将显示在此处…"
                     android:textColor="#FFFFFF"
                     android:textColorHint="#555555"
-                    android:textSize="20sp" />
+                    android:textSize="20sp"
+                    android:lineSpacingExtra="4dp" />
             </LinearLayout>
         </androidx.cardview.widget.CardView>
 
@@ -150,7 +162,8 @@
                     android:hint="翻译将显示在此处…"
                     android:textColor="#C0E8C0"
                     android:textColorHint="#3A5A3A"
-                    android:textSize="20sp" />
+                    android:textSize="20sp"
+                    android:lineSpacingExtra="4dp" />
             </LinearLayout>
         </androidx.cardview.widget.CardView>
 
@@ -174,7 +187,7 @@
             android:layout_height="wrap_content"
             android:layout_marginTop="32dp"
             android:gravity="center"
-            android:text="Whisper(服务端) + MyMemory Translate"
+            android:text="Gemma 4 本地推理 · 完全离线 · 无需网络"
             android:textColor="#444444"
             android:textSize="12sp" />
 

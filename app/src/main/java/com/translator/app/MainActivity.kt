@@ -1,26 +1,24 @@
 package com.translator.app
 
 import android.Manifest
-import android.content.Intent
 import android.content.pm.PackageManager
-import android.os.Build
+import android.media.AudioFormat
+import android.media.AudioRecord
+import android.media.MediaRecorder
 import android.os.Bundle
-import android.speech.RecognitionListener
-import android.speech.RecognizerIntent
-import android.speech.SpeechRecognizer
-import android.view.MotionEvent
 import android.view.View
 import android.widget.*
 import androidx.appcompat.app.AppCompatActivity
-import androidx.cardview.widget.CardView
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
+import com.google.mlkit.genai.prompt.GenerativeAudioPrompt
+import com.google.mlkit.genai.prompt.GenerativeModel
+import com.google.mlkit.genai.prompt.GenerativeModelFidelity
 import kotlinx.coroutines.*
-import org.json.JSONObject
-import java.io.BufferedReader
-import java.io.InputStreamReader
-import java.net.HttpURLConnection
-import java.net.URL
+import java.io.ByteArrayOutputStream
+import java.text.SimpleDateFormat
+import java.util.*
+import kotlin.math.abs
 
 class MainActivity : AppCompatActivity() {
 
@@ -31,23 +29,51 @@ class MainActivity : AppCompatActivity() {
     private lateinit var sourceLang: Spinner
     private lateinit var targetLang: Spinner
     private lateinit var historyLayout: LinearLayout
+    private lateinit var modelStatusText: TextView
 
-    private var speechRecognizer: SpeechRecognizer? = null
     private var isRecording = false
-    private val historyItems = mutableListOf<Pair<String, String>>()
+    private var recordingJob: Job? = null
+
+    // 录音参数
+    private val sampleRate = 16000
+    private val bufferSize = 4096
+    private val silenceThreshold = 0.035
+    private val silenceTimeoutMs = 2500L
+    private var lastVoiceTime = 0L
+    private var isInSilence = false
+    private var segmentBuffer = ByteArrayOutputStream()
+    private var isSegmentProcessing = false
+
+    // Gemma 4 模型
+    private var generativeModel: GenerativeModel? = null
+    private var gemmaModelReady = false
+
+    private val transcriptBuffer = StringBuilder()
+    private val translationBuffer = StringBuilder()
+    private val historyItems = mutableListOf<HistoryItem>()
     private val scope = CoroutineScope(Dispatchers.Main + SupervisorJob())
 
-    // 翻译服务器地址
-    private val serverUrl = "https://7668aa24d9b37008-111-229-193-192.serveousercontent.com"
+    data class LangInfo(val displayName: String, val translateCode: String)
 
-    private val sourceLanguages = arrayOf("zh-CN", "en-US", "ja-JP", "ko-KR")
-    private val targetLanguages = arrayOf("en", "zh", "ja", "ko")
-    private val langNames = mapOf(
-        "zh-CN" to "中文", "en-US" to "English",
-        "ja-JP" to "日本語", "ko-KR" to "한국어",
-        "en" to "English", "zh" to "中文",
-        "ja" to "日本語", "ko" to "한국어"
+    data class HistoryItem(
+        val source: String,
+        val target: String,
+        val time: String,
+        val sourceLang: String,
+        val targetLang: String
     )
+
+    // 6 种语言
+    private val languages = listOf(
+        LangInfo("中文", "Chinese"),
+        LangInfo("English", "English"),
+        LangInfo("Русский", "Russian"),
+        LangInfo("العربية", "Arabic"),
+        LangInfo("Español", "Spanish"),
+        LangInfo("Français", "French")
+    )
+
+    private val timeFormatter = SimpleDateFormat("HH:mm:ss", Locale.getDefault())
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -60,192 +86,295 @@ class MainActivity : AppCompatActivity() {
         sourceLang = findViewById(R.id.sourceLang)
         targetLang = findViewById(R.id.targetLang)
         historyLayout = findViewById(R.id.historyLayout)
+        modelStatusText = findViewById(R.id.modelStatusText)
 
-        // 设置语言选择器
-        sourceLang.adapter = ArrayAdapter(this, android.R.layout.simple_spinner_dropdown_item,
-            sourceLanguages.map { "${langNames[it] ?: it} ($it)" })
-        targetLang.adapter = ArrayAdapter(this, android.R.layout.simple_spinner_dropdown_item,
-            targetLanguages.map { "${langNames[it] ?: it} ($it)" })
-        targetLang.setSelection(0) // 默认 English
+        val names = languages.map { it.displayName }
+        sourceLang.adapter = ArrayAdapter(this, android.R.layout.simple_spinner_dropdown_item, names)
+        targetLang.adapter = ArrayAdapter(this, android.R.layout.simple_spinner_dropdown_item, names)
+        sourceLang.setSelection(0)
+        targetLang.setSelection(1)
 
-        // 检查权限
         checkPermission()
 
-        // 初始化语音识别器
-        speechRecognizer = SpeechRecognizer.createSpeechRecognizer(this)
+        // 初始化 Gemma 4 模型
+        initGemmaModel()
 
-        // 按键录音
-        recordBtn.setOnTouchListener { _, event ->
-            when (event.action) {
-                MotionEvent.ACTION_DOWN -> startRecording()
-                MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> stopRecording()
-            }
-            true
+        recordBtn.setOnClickListener {
+            if (isRecording) stopRecording() else startRecording()
         }
     }
 
-    private fun checkPermission() {
-        if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO)
-            != PackageManager.PERMISSION_GRANTED) {
-            ActivityCompat.requestPermissions(this,
-                arrayOf(Manifest.permission.RECORD_AUDIO), 100)
+    private fun initGemmaModel() {
+        modelStatusText.text = "⏳ 初始化 Gemma 4 模型…"
+        modelStatusText.setTextColor(android.graphics.Color.parseColor("#FFA500"))
+
+        scope.launch(Dispatchers.IO) {
+            try {
+                val model = GenerativeModel(
+                    modelName = "gemma-4-e2b-quantized",
+                    apiKey = "",
+                    fidelity = GenerativeModelFidelity.FASTEST
+                )
+
+                generativeModel = model
+                gemmaModelReady = true
+
+                runOnUiThread {
+                    modelStatusText.text = "🟢 Gemma 4 E2B 就绪 · 本地识别+翻译"
+                    modelStatusText.setTextColor(android.graphics.Color.parseColor("#4CAF50"))
+                    statusText.text = "就绪，点击开始同传"
+                }
+            } catch (e: Exception) {
+                runOnUiThread {
+                    modelStatusText.text = "❌ 模型未就绪：${e.message}"
+                    modelStatusText.setTextColor(android.graphics.Color.parseColor("#FF4444"))
+                    statusText.text = "⚠️ 请先通过 AI Edge Gallery 下载 Gemma 4 E2B 模型"
+                }
+            }
         }
     }
 
     private fun startRecording() {
         if (isRecording) return
+        if (!gemmaModelReady || generativeModel == null) {
+            Toast.makeText(this, "Gemma 4 模型未就绪，请在 AI Edge Gallery 中下载", Toast.LENGTH_LONG).show()
+            return
+        }
         if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO)
-            != PackageManager.PERMISSION_GRANTED) {
-            statusText.text = "❌ 需要麦克风权限"
+            != PackageManager.PERMISSION_GRANTED
+        ) {
+            Toast.makeText(this, "需要麦克风权限", Toast.LENGTH_SHORT).show()
             return
         }
 
-        val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
-            putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL,
-                RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
-            putExtra(RecognizerIntent.EXTRA_LANGUAGE, sourceLang.selectedItem.toString()
-                .substringAfter("(").substringBefore(")"))
-            putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)
-            putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 5)
-        }
+        isRecording = true
+        transcriptBuffer.clear()
+        translationBuffer.clear()
+        segmentBuffer = ByteArrayOutputStream()
+        isSegmentProcessing = false
+        lastVoiceTime = System.currentTimeMillis()
 
-        speechRecognizer?.setRecognitionListener(object : RecognitionListener {
-            override fun onReadyForSpeech(params: Bundle?) {
-                isRecording = true
+        updateUIForRecording(true)
+        updateStatus("🎤 录音中… 静音自动识别翻译")
+
+        recordingJob = scope.launch(Dispatchers.IO) {
+            val minBufferSize = maxOf(
+                AudioRecord.getMinBufferSize(
+                    sampleRate, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT
+                ),
+                bufferSize * 4
+            )
+
+            val audioRecord = try {
+                AudioRecord(
+                    MediaRecorder.AudioSource.MIC, sampleRate,
+                    AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT, minBufferSize
+                )
+            } catch (e: Exception) {
                 runOnUiThread {
-                    recordBtn.text = "🔴 松开识别"
-                    statusText.text = "🎤 录音中…"
-                    recordBtn.setBackgroundTintList(
-                        ContextCompat.getColorStateList(this@MainActivity,
-                            android.R.color.holo_red_light))
+                    updateStatus("❌ 录音初始化失败")
+                    isRecording = false
+                    updateUIForRecording(false)
                 }
+                return@launch
             }
 
-            override fun onResults(results: Bundle?) {
-                isRecording = false
-                val texts = results?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
-                val text = texts?.firstOrNull() ?: ""
-                runOnUiThread {
-                    resetButton()
-                    if (text.isNotEmpty()) {
-                        transcriptText.text = text
-                        statusText.text = "⏳ 翻译中…"
-                        translateText(text)
+            audioRecord.startRecording()
+            val buffer = ShortArray(bufferSize)
+
+            while (isRecording && isActive) {
+                val read = audioRecord.read(buffer, 0, bufferSize)
+                if (read > 0) {
+                    val rms = calculateRMS(buffer, read)
+                    val byteBuf = ByteArray(read * 2)
+                    for (i in 0 until read) {
+                        byteBuf[i * 2] = (buffer[i].toInt() and 0xFF).toByte()
+                        byteBuf[i * 2 + 1] = ((buffer[i].toInt() shr 8) and 0xFF).toByte()
+                    }
+                    segmentBuffer.write(byteBuf)
+
+                    val now = System.currentTimeMillis()
+                    if (rms < silenceThreshold) {
+                        if (!isInSilence) {
+                            isInSilence = true
+                            lastVoiceTime = now
+                        }
+                        if (now - lastVoiceTime > silenceTimeoutMs && segmentBuffer.size() > sampleRate) {
+                            processAudioSegment()
+                        }
                     } else {
-                        statusText.text = "⚠️ 未识别到语音"
+                        isInSilence = false
+                        lastVoiceTime = now
                     }
                 }
             }
 
-            override fun onPartialResults(partialResults: Bundle?) {
-                val texts = partialResults?.getStringArrayList(
-                    SpeechRecognizer.RESULTS_RECOGNITION)
-                val text = texts?.firstOrNull() ?: ""
-                runOnUiThread {
-                    if (text.isNotEmpty()) {
-                        transcriptText.text = text
+            try {
+                audioRecord.stop()
+                audioRecord.release()
+            } catch (_: Exception) {}
+
+            processAudioSegment()
+        }
+    }
+
+    private suspend fun transcribeAndTranslate(
+        audioData: ByteArray,
+        sourceLangCode: String,
+        targetLangCode: String
+    ): Pair<String, String> {
+        return withContext(Dispatchers.IO) {
+            try {
+                val model = generativeModel ?: return@withContext Pair("", "")
+
+                val promptText = """
+                    You are a professional simultaneous interpreter.
+                    Transcribe the speech in $sourceLangCode, then translate it to $targetLangCode.
+                    Output format:
+                    [Transcription] <transcribed text>
+                    [Translation] <translated text>
+                    Do NOT add any extra text or explanation.
+                """.trimIndent()
+
+                val audioPrompt = GenerativeAudioPrompt(
+                    audio = audioData,
+                    text = promptText
+                )
+
+                val result = model.generateContent(audioPrompt)
+                val output = result.text?.trim() ?: ""
+
+                if (output.isEmpty()) return@withContext Pair("", "")
+
+                val transcription = extractTag(output, "Transcription")
+                val translation = extractTag(output, "Translation")
+
+                if (transcription.isNotEmpty() && translation.isNotEmpty()) {
+                    Pair(transcription, translation)
+                } else if (transcription.isNotEmpty()) {
+                    Pair(transcription, output)
+                } else {
+                    Pair("", "")
+                }
+            } catch (e: Exception) {
+                runOnUiThread { updateStatus("⚠️ 推理错误：${e.message}") }
+                Pair("", "")
+            }
+        }
+    }
+
+    private fun extractTag(text: String, tag: String): String {
+        val regex = Regex("""\[$tag\]\s*(.+?)(?=\n\[|$)""", RegexOption.DOT_MATCHES_ALL)
+        val match = regex.find(text.trim())
+        return match?.groupValues?.get(1)?.trim() ?: ""
+    }
+
+    private fun processAudioSegment() {
+        if (isSegmentProcessing) return
+        val audioData = segmentBuffer.toByteArray()
+        segmentBuffer = ByteArrayOutputStream()
+        if (audioData.size < sampleRate * 3) return
+
+        isSegmentProcessing = true
+        val sourceLangInfo = languages[sourceLang.selectedItemPosition]
+        val targetLangInfo = languages[targetLang.selectedItemPosition]
+
+        scope.launch {
+            updateStatus("🤖 Gemma 4 处理中…")
+            try {
+                val result = transcribeAndTranslate(
+                    audioData,
+                    sourceLangInfo.translateCode,
+                    targetLangInfo.translateCode
+                )
+
+                if (result.first.isNotEmpty()) {
+                    runOnUiThread {
+                        transcriptBuffer.append(result.first).append("\n")
+                        transcriptText.text = transcriptBuffer.toString()
+
+                        if (result.second.isNotEmpty()) {
+                            translationBuffer.append(result.second).append("\n")
+                            translationText.text = translationBuffer.toString()
+                            addHistory(result.first, result.second)
+                        }
+
+                        val scrollView = findViewById<ScrollView>(R.id.scrollView)
+                        scrollView?.post { scrollView.fullScroll(View.FOCUS_DOWN) }
                     }
+                    updateStatus("🎤 继续监听…")
+                } else {
+                    updateStatus("🎤 监听中…")
                 }
+            } catch (_: Exception) {
+                updateStatus("🎤 监听中…")
+            } finally {
+                isSegmentProcessing = false
             }
-
-            override fun onError(error: Int) {
-                isRecording = false
-                val msg = when (error) {
-                    SpeechRecognizer.ERROR_NO_MATCH -> "未识别到语音"
-                    SpeechRecognizer.ERROR_SPEECH_TIMEOUT -> "没有说话"
-                    SpeechRecognizer.ERROR_AUDIO -> "录音错误"
-                    SpeechRecognizer.ERROR_NETWORK -> "网络错误"
-                    else -> "错误: $error"
-                }
-                runOnUiThread {
-                    resetButton()
-                    statusText.text = "⚠️ $msg"
-                }
-            }
-
-            override fun onBeginningOfSpeech() {}
-            override fun onBufferReceived(buffer: ByteArray?) {}
-            override fun onEndOfSpeech() {}
-            override fun onEvent(eventType: Int, params: Bundle?) {}
-            override fun onRmsChanged(rmsdB: Float) {}
-        })
-
-        speechRecognizer?.startListening(intent)
+        }
     }
 
     private fun stopRecording() {
-        speechRecognizer?.stopListening()
-    }
-
-    private fun resetButton() {
-        recordBtn.text = "🎤 按住说话"
-        recordBtn.setBackgroundTintList(
-            ContextCompat.getColorStateList(this, R.color.blue))
-    }
-
-    private fun translateText(text: String) {
-        val source = sourceLang.selectedItem.toString()
-            .substringAfter("(").substringBefore(")")
-        val target = targetLang.selectedItem.toString()
-            .substringAfter("(").substringBefore(")")
-
+        isRecording = false
+        recordingJob?.cancel()
         scope.launch {
-            try {
-                val result = withContext(Dispatchers.IO) {
-                    doTranslate(text, source, target)
-                }
-                translationText.text = result
-                addHistory(text, result)
-                statusText.text = "✅ 完成"
-            } catch (e: Exception) {
-                statusText.text = "❌ 翻译失败: ${e.message}"
-            }
+            delay(1000)
+            updateUIForRecording(false)
+            updateStatus("✅ 已停止")
         }
     }
 
-    private fun doTranslate(text: String, source: String, target: String): String {
-        val json = JSONObject().apply {
-            put("text", text)
-            put("source", source.split("-")[0])
-            put("target", target)
+    private fun updateUIForRecording(recording: Boolean) {
+        runOnUiThread {
+            recordBtn.text = if (recording) "⏹ 停止同传" else "🎤 开始同传"
+            recordBtn.setBackgroundTintList(
+                ContextCompat.getColorStateList(
+                    this@MainActivity,
+                    if (recording) android.R.color.holo_red_light else android.R.color.holo_blue_dark
+                )
+            )
         }
+    }
 
-        val url = URL("$serverUrl/translate")
-        val conn = url.openConnection() as HttpURLConnection
-        conn.requestMethod = "POST"
-        conn.setRequestProperty("Content-Type", "application/json")
-        conn.doOutput = true
-        conn.connectTimeout = 10000
-        conn.readTimeout = 10000
-
-        conn.outputStream.write(json.toString().toByteArray())
-
-        val reader = BufferedReader(InputStreamReader(conn.inputStream))
-        val response = reader.readText()
-        reader.close()
-
-        val resultJson = JSONObject(response)
-        return resultJson.optString("translation", text)
+    private fun updateStatus(msg: String) {
+        runOnUiThread { statusText.text = msg }
     }
 
     private fun addHistory(src: String, tgt: String) {
-        historyItems.add(0, Pair(src, tgt))
-        if (historyItems.size > 30) historyItems.removeLast()
-
+        val sourceName = languages.getOrNull(sourceLang.selectedItemPosition)?.displayName ?: ""
+        val targetName = languages.getOrNull(targetLang.selectedItemPosition)?.displayName ?: ""
+        historyItems.add(0, HistoryItem(src, tgt, timeFormatter.format(Date()), sourceName, targetName))
+        if (historyItems.size > 100) historyItems.removeLast()
         runOnUiThread {
             historyLayout.removeAllViews()
             for (item in historyItems) {
                 val view = layoutInflater.inflate(R.layout.history_item, historyLayout, false)
-                view.findViewById<TextView>(R.id.historySource).text = item.first
-                view.findViewById<TextView>(R.id.historyTarget).text = item.second
+                view.findViewById<TextView>(R.id.historySource).text = "[${item.sourceLang}] ${item.source}"
+                view.findViewById<TextView>(R.id.historyTarget).text = "[${item.targetLang}] ${item.target}"
+                view.findViewById<TextView>(R.id.historyTime).text = item.time
                 historyLayout.addView(view)
             }
         }
     }
 
+    private fun calculateRMS(buffer: ShortArray, length: Int): Double {
+        var sum = 0.0
+        for (i in 0 until length) sum += abs(buffer[i].toDouble()) / 32767.0
+        return sum / length
+    }
+
+    private fun checkPermission() {
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO)
+            != PackageManager.PERMISSION_GRANTED
+        ) {
+            ActivityCompat.requestPermissions(this, arrayOf(Manifest.permission.RECORD_AUDIO), 100)
+        }
+    }
+
     override fun onDestroy() {
         super.onDestroy()
-        speechRecognizer?.destroy()
+        isRecording = false
+        recordingJob?.cancel()
         scope.cancel()
     }
 }
