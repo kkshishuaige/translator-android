@@ -5,12 +5,12 @@ plugins {
 
 android {
     namespace = "com.translator.app"
-    compileSdk = 35
+    compileSdk = 34
 
     defaultConfig {
         applicationId = "com.translator.app"
         minSdk = 31
-        targetSdk = 35
+        targetSdk = 34
         versionCode = 3
         versionName = "3.0.0"
     }
@@ -40,11 +40,11 @@ android {
 }
 
 dependencies {
-    implementation("androidx.core:core-ktx:1.13.1")
-    implementation("androidx.appcompat:appcompat:1.7.0")
-    implementation("androidx.activity:activity-ktx:1.9.3")
-    implementation("com.google.android.material:material:1.12.0")
-    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.1")
+    implementation("androidx.core:core-ktx:1.12.0")
+    implementation("androidx.appcompat:appcompat:1.6.1")
+    implementation("androidx.activity:activity-ktx:1.8.2")
+    implementation("com.google.android.material:material:1.11.0")
+    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.7.3")
 
     // ML Kit GenAI Prompt API — 调用本地 Gemma 4 模型
     implementation("com.google.mlkit:genai-prompt:1.0.0-beta2")
