@@ -6,19 +6,19 @@ import android.media.AudioFormat
 import android.media.AudioRecord
 import android.media.MediaRecorder
 import android.os.Bundle
-import android.view.View
+import android.os.Environment
 import android.widget.*
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
-import com.google.mlkit.genai.prompt.GenerativeAudioPrompt
-import com.google.mlkit.genai.prompt.GenerativeModel
-import com.google.mlkit.genai.prompt.GenerativeModelFidelity
 import kotlinx.coroutines.*
-import java.io.ByteArrayOutputStream
+import okhttp3.*
+import org.json.JSONObject
+import java.io.*
 import java.text.SimpleDateFormat
 import java.util.*
 import kotlin.math.abs
+import java.util.concurrent.TimeUnit
 
 class MainActivity : AppCompatActivity() {
 
@@ -29,10 +29,10 @@ class MainActivity : AppCompatActivity() {
     private lateinit var sourceLang: Spinner
     private lateinit var targetLang: Spinner
     private lateinit var historyLayout: LinearLayout
-    private lateinit var modelStatusText: TextView
 
     private var isRecording = false
     private var recordingJob: Job? = null
+    private var segmentProcessJob: Job? = null
 
     // 录音参数
     private val sampleRate = 16000
@@ -44,36 +44,50 @@ class MainActivity : AppCompatActivity() {
     private var segmentBuffer = ByteArrayOutputStream()
     private var isSegmentProcessing = false
 
-    // Gemma 4 模型
-    private var generativeModel: GenerativeModel? = null
-    private var gemmaModelReady = false
+    // 识别引擎 — 优先本地 Qwen3-ASR，回退服务器 Whisper
+    private var qwenModelLoaded = false
+    private var useLocalASR = false
 
     private val transcriptBuffer = StringBuilder()
     private val translationBuffer = StringBuilder()
     private val historyItems = mutableListOf<HistoryItem>()
     private val scope = CoroutineScope(Dispatchers.Main + SupervisorJob())
+    private val serverUrl = "http://111.229.193.192:3000"
+    private val okHttpClient = OkHttpClient.Builder()
+        .connectTimeout(15, TimeUnit.SECONDS)
+        .readTimeout(30, TimeUnit.SECONDS)
+        .writeTimeout(30, TimeUnit.SECONDS)
+        .build()
 
-    data class LangInfo(val displayName: String, val translateCode: String)
+    data class LangInfo(val locale: String, val displayName: String, val translateCode: String)
+    data class HistoryItem(val source: String, val target: String, val time: String,
+                           val sourceLang: String, val targetLang: String, val asr: String)
 
-    data class HistoryItem(
-        val source: String,
-        val target: String,
-        val time: String,
-        val sourceLang: String,
-        val targetLang: String
-    )
-
-    // 6 种语言
     private val languages = listOf(
-        LangInfo("中文", "Chinese"),
-        LangInfo("English", "English"),
-        LangInfo("Русский", "Russian"),
-        LangInfo("العربية", "Arabic"),
-        LangInfo("Español", "Spanish"),
-        LangInfo("Français", "French")
+        LangInfo("zh", "中文", "zh"),
+        LangInfo("en", "English", "en"),
+        LangInfo("ru", "Русский", "ru"),
+        LangInfo("ar", "العربية", "ar"),
+        LangInfo("es", "Español", "es"),
+        LangInfo("fr", "Français", "fr")
     )
 
     private val timeFormatter = SimpleDateFormat("HH:mm:ss", Locale.getDefault())
+
+    // ===== llama.cpp JNI =====
+    companion object {
+        init {
+            try {
+                System.loadLibrary("llama")
+            } catch (_: UnsatisfiedLinkError) {}
+        }
+    }
+
+    private external fun llamaInit(modelPath: String, nCtx: Int): Long
+    private external fun llamaEval(contextPtr: Long, input: FloatArray, nSteps: Int): String
+    private external fun llamaRelease(contextPtr: Long)
+
+    private var llamaContext: Long = 0
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -86,7 +100,6 @@ class MainActivity : AppCompatActivity() {
         sourceLang = findViewById(R.id.sourceLang)
         targetLang = findViewById(R.id.targetLang)
         historyLayout = findViewById(R.id.historyLayout)
-        modelStatusText = findViewById(R.id.modelStatusText)
 
         val names = languages.map { it.displayName }
         sourceLang.adapter = ArrayAdapter(this, android.R.layout.simple_spinner_dropdown_item, names)
@@ -96,53 +109,60 @@ class MainActivity : AppCompatActivity() {
 
         checkPermission()
 
-        // 初始化 Gemma 4 模型
-        initGemmaModel()
+        // 检查本地 Qwen3-ASR 模型是否存在
+        checkLocalModel()
 
         recordBtn.setOnClickListener {
             if (isRecording) stopRecording() else startRecording()
         }
     }
 
-    private fun initGemmaModel() {
-        modelStatusText.text = "⏳ 初始化 Gemma 4 模型…"
-        modelStatusText.setTextColor(android.graphics.Color.parseColor("#FFA500"))
-
+    private fun checkLocalModel() {
         scope.launch(Dispatchers.IO) {
-            try {
-                val model = GenerativeModel(
-                    modelName = "gemma-4-e2b-quantized",
-                    apiKey = "",
-                    fidelity = GenerativeModelFidelity.FASTEST
-                )
+            val modelPaths = listOf(
+                Environment.getExternalStorageDirectory().absolutePath + "/qwen3_asr/qwen3_asr_0.6b_q4_k_m.gguf",
+                Environment.getExternalStorageDirectory().absolutePath + "/qwen3_asr/qwen3_asr_0.6b.gguf",
+                "/sdcard/qwen3_asr/qwen3_asr_0.6b_q4_k_m.gguf",
+                "/storage/emulated/0/qwen3_asr/qwen3_asr_0.6b_q4_k_m.gguf"
+            )
 
-                generativeModel = model
-                gemmaModelReady = true
+            var foundModel = ""
+            for (p in modelPaths) {
+                val f = File(p)
+                if (f.exists() && f.length() > 100 * 1024 * 1024) {
+                    foundModel = p
+                    break
+                }
+            }
 
-                runOnUiThread {
-                    modelStatusText.text = "🟢 Gemma 4 E2B 就绪 · 本地识别+翻译"
-                    modelStatusText.setTextColor(android.graphics.Color.parseColor("#4CAF50"))
-                    statusText.text = "就绪，点击开始同传"
+            if (foundModel.isNotEmpty()) {
+                runOnUiThread { statusText.text = "⏳ 加载本地模型…" }
+                try {
+                    llamaContext = llamaInit(foundModel, 2048)
+                    if (llamaContext != 0L) {
+                        qwenModelLoaded = true
+                        useLocalASR = true
+                        runOnUiThread {
+                            statusText.text = "🟢 本地模型就绪（${foundModel.split("/").last().take(20)}）"
+                        }
+                        return@launch
+                    }
+                } catch (e: Exception) {
+                    // fallback
                 }
-            } catch (e: Exception) {
-                runOnUiThread {
-                    modelStatusText.text = "❌ 模型未就绪：${e.message}"
-                    modelStatusText.setTextColor(android.graphics.Color.parseColor("#FF4444"))
-                    statusText.text = "⚠️ 请先通过 AI Edge Gallery 下载 Gemma 4 E2B 模型"
-                }
+            }
+
+            runOnUiThread {
+                useLocalASR = false
+                statusText.text = "⚡ 使用服务器识别（未找到本地模型）"
             }
         }
     }
 
     private fun startRecording() {
         if (isRecording) return
-        if (!gemmaModelReady || generativeModel == null) {
-            Toast.makeText(this, "Gemma 4 模型未就绪，请在 AI Edge Gallery 中下载", Toast.LENGTH_LONG).show()
-            return
-        }
         if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO)
-            != PackageManager.PERMISSION_GRANTED
-        ) {
+            != PackageManager.PERMISSION_GRANTED) {
             Toast.makeText(this, "需要麦克风权限", Toast.LENGTH_SHORT).show()
             return
         }
@@ -155,13 +175,11 @@ class MainActivity : AppCompatActivity() {
         lastVoiceTime = System.currentTimeMillis()
 
         updateUIForRecording(true)
-        updateStatus("🎤 录音中… 静音自动识别翻译")
+        updateStatus(if (useLocalASR) "🎤 本地识别中…" else "🎤 服务器识别中…")
 
         recordingJob = scope.launch(Dispatchers.IO) {
             val minBufferSize = maxOf(
-                AudioRecord.getMinBufferSize(
-                    sampleRate, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT
-                ),
+                AudioRecord.getMinBufferSize(sampleRate, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT),
                 bufferSize * 4
             )
 
@@ -171,11 +189,7 @@ class MainActivity : AppCompatActivity() {
                     AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT, minBufferSize
                 )
             } catch (e: Exception) {
-                runOnUiThread {
-                    updateStatus("❌ 录音初始化失败")
-                    isRecording = false
-                    updateUIForRecording(false)
-                }
+                runOnUiThread { updateStatus("❌ 录音初始化失败"); isRecording = false; updateUIForRecording(false) }
                 return@launch
             }
 
@@ -196,77 +210,20 @@ class MainActivity : AppCompatActivity() {
                     val now = System.currentTimeMillis()
                     if (rms < silenceThreshold) {
                         if (!isInSilence) {
-                            isInSilence = true
-                            lastVoiceTime = now
+                            isInSilence = true; lastVoiceTime = now
                         }
                         if (now - lastVoiceTime > silenceTimeoutMs && segmentBuffer.size() > sampleRate) {
                             processAudioSegment()
                         }
                     } else {
-                        isInSilence = false
-                        lastVoiceTime = now
+                        isInSilence = false; lastVoiceTime = now
                     }
                 }
             }
 
-            try {
-                audioRecord.stop()
-                audioRecord.release()
-            } catch (_: Exception) {}
-
+            try { audioRecord.stop(); audioRecord.release() } catch (_: Exception) {}
             processAudioSegment()
         }
-    }
-
-    private suspend fun transcribeAndTranslate(
-        audioData: ByteArray,
-        sourceLangCode: String,
-        targetLangCode: String
-    ): Pair<String, String> {
-        return withContext(Dispatchers.IO) {
-            try {
-                val model = generativeModel ?: return@withContext Pair("", "")
-
-                val promptText = """
-                    You are a professional simultaneous interpreter.
-                    Transcribe the speech in $sourceLangCode, then translate it to $targetLangCode.
-                    Output format:
-                    [Transcription] <transcribed text>
-                    [Translation] <translated text>
-                    Do NOT add any extra text or explanation.
-                """.trimIndent()
-
-                val audioPrompt = GenerativeAudioPrompt(
-                    audio = audioData,
-                    text = promptText
-                )
-
-                val result = model.generateContent(audioPrompt)
-                val output = result.text?.trim() ?: ""
-
-                if (output.isEmpty()) return@withContext Pair("", "")
-
-                val transcription = extractTag(output, "Transcription")
-                val translation = extractTag(output, "Translation")
-
-                if (transcription.isNotEmpty() && translation.isNotEmpty()) {
-                    Pair(transcription, translation)
-                } else if (transcription.isNotEmpty()) {
-                    Pair(transcription, output)
-                } else {
-                    Pair("", "")
-                }
-            } catch (e: Exception) {
-                runOnUiThread { updateStatus("⚠️ 推理错误：${e.message}") }
-                Pair("", "")
-            }
-        }
-    }
-
-    private fun extractTag(text: String, tag: String): String {
-        val regex = Regex("""\[$tag\]\s*(.+?)(?=\n\[|$)""", RegexOption.DOT_MATCHES_ALL)
-        val match = regex.find(text.trim())
-        return match?.groupValues?.get(1)?.trim() ?: ""
     }
 
     private fun processAudioSegment() {
@@ -280,37 +237,105 @@ class MainActivity : AppCompatActivity() {
         val targetLangInfo = languages[targetLang.selectedItemPosition]
 
         scope.launch {
-            updateStatus("🤖 Gemma 4 处理中…")
             try {
-                val result = transcribeAndTranslate(
-                    audioData,
-                    sourceLangInfo.translateCode,
-                    targetLangInfo.translateCode
-                )
-
-                if (result.first.isNotEmpty()) {
-                    runOnUiThread {
-                        transcriptBuffer.append(result.first).append("\n")
-                        transcriptText.text = transcriptBuffer.toString()
-
-                        if (result.second.isNotEmpty()) {
-                            translationBuffer.append(result.second).append("\n")
-                            translationText.text = translationBuffer.toString()
-                            addHistory(result.first, result.second)
-                        }
-
-                        val scrollView = findViewById<ScrollView>(R.id.scrollView)
-                        scrollView?.post { scrollView.fullScroll(View.FOCUS_DOWN) }
-                    }
-                    updateStatus("🎤 继续监听…")
+                val text = if (useLocalASR && qwenModelLoaded && llamaContext != 0L) {
+                    recognizeLocal(audioData, sourceLangInfo.translateCode)
                 } else {
-                    updateStatus("🎤 监听中…")
+                    recognizeServer(audioData, sourceLangInfo.translateCode, targetLangInfo.translateCode)
                 }
-            } catch (_: Exception) {
-                updateStatus("🎤 监听中…")
-            } finally {
+
+                if (text.first.isNotEmpty()) {
+                    runOnUiThread {
+                        transcriptBuffer.append(text.first).append("\n")
+                        transcriptText.text = transcriptBuffer.toString()
+                        if (text.second.isNotEmpty()) {
+                            translationBuffer.append(text.second).append("\n")
+                            translationText.text = translationBuffer.toString()
+                            addHistory(text.first, text.second, if (useLocalASR) "本地" else "服务器")
+                        }
+                    }
+                }
+            } catch (_: Exception) {} finally {
                 isSegmentProcessing = false
             }
+        }
+    }
+
+    // 本地 Qwen3-ASR 识别（用 llama.cpp 推理）
+    private fun recognizeLocal(pcmData: ByteArray, language: String): Pair<String, String> {
+        try {
+            val samples = ShortArray(pcmData.size / 2)
+            for (i in samples.indices) {
+                val low = pcmData[i * 2].toInt() and 0xFF
+                val high = (pcmData[i * 2 + 1].toInt() and 0xFF) shl 8
+                samples[i] = (low or high).toShort()
+            }
+
+            val floats = FloatArray(samples.size)
+            for (i in samples.indices) {
+                floats[i] = samples[i].toFloat() / 32768.0f
+            }
+
+            val result = llamaEval(llamaContext, floats, floats.size)
+            val text = result.trim()
+
+            if (text.isNotEmpty()) {
+                val translation = translateServer(text, language)
+                return Pair(text, translation)
+            }
+        } catch (e: Exception) {
+            runOnUiThread { updateStatus("⚠️ 本地识别错误，切换到服务器") }
+            useLocalASR = false
+        }
+        return Pair("", "")
+    }
+
+    // 服务器 Whisper 识别
+    private suspend fun recognizeServer(pcmData: ByteArray, sourceLang: String, targetLang: String): Pair<String, String> {
+        return withContext(Dispatchers.IO) {
+            try {
+                val tempFile = File(cacheDir, "asr_${System.currentTimeMillis()}.wav")
+                createWavFile(tempFile, pcmData)
+
+                val body = MultipartBody.Builder()
+                    .setType(MultipartBody.FORM)
+                    .addFormDataPart("audio", "audio.wav",
+                        RequestBody.create("audio/wav".toMediaTypeOrNull(), tempFile))
+                    .addFormDataPart("language", sourceLang)
+                    .addFormDataPart("target", targetLang)
+                    .build()
+
+                val request = Request.Builder().url("$serverUrl/asr").post(body).build()
+                val response = okHttpClient.newCall(request).execute()
+                val json = JSONObject(response.body?.string() ?: "{}")
+                tempFile.delete()
+
+                Pair(json.optString("text", ""), json.optString("translation", ""))
+            } catch (e: Exception) {
+                Pair("", "")
+            }
+        }
+    }
+
+    // 翻译（服务端）
+    private fun translateServer(text: String, source: String): String {
+        return try {
+            val json = JSONObject().apply {
+                put("text", text); put("source", source)
+                put("target", languages[targetLang.selectedItemPosition].translateCode)
+            }
+            val conn = URL("$serverUrl/translate").openConnection() as java.net.HttpURLConnection
+            conn.requestMethod = "POST"
+            conn.setRequestProperty("Content-Type", "application/json")
+            conn.doOutput = true
+            conn.connectTimeout = 10000; conn.readTimeout = 10000
+            conn.outputStream.write(json.toString().toByteArray())
+            val reader = java.io.BufferedReader(java.io.InputStreamReader(conn.inputStream))
+            val response = reader.readText(); reader.close()
+            conn.disconnect()
+            JSONObject(response).optString("translation", text)
+        } catch (e: Exception) {
+            text
         }
     }
 
@@ -318,7 +343,7 @@ class MainActivity : AppCompatActivity() {
         isRecording = false
         recordingJob?.cancel()
         scope.launch {
-            delay(1000)
+            delay(3000)
             updateUIForRecording(false)
             updateStatus("✅ 已停止")
         }
@@ -328,33 +353,53 @@ class MainActivity : AppCompatActivity() {
         runOnUiThread {
             recordBtn.text = if (recording) "⏹ 停止同传" else "🎤 开始同传"
             recordBtn.setBackgroundTintList(
-                ContextCompat.getColorStateList(
-                    this@MainActivity,
-                    if (recording) android.R.color.holo_red_light else android.R.color.holo_blue_dark
-                )
-            )
+                ContextCompat.getColorStateList(this@MainActivity,
+                    if (recording) android.R.color.holo_red_light else R.color.blue))
         }
     }
 
-    private fun updateStatus(msg: String) {
-        runOnUiThread { statusText.text = msg }
-    }
+    private fun updateStatus(msg: String) { runOnUiThread { statusText.text = msg } }
 
-    private fun addHistory(src: String, tgt: String) {
+    private fun addHistory(src: String, tgt: String, asr: String) {
         val sourceName = languages.getOrNull(sourceLang.selectedItemPosition)?.displayName ?: ""
         val targetName = languages.getOrNull(targetLang.selectedItemPosition)?.displayName ?: ""
-        historyItems.add(0, HistoryItem(src, tgt, timeFormatter.format(Date()), sourceName, targetName))
+        historyItems.add(0, HistoryItem(src, tgt, timeFormatter.format(Date()), sourceName, targetName, asr))
         if (historyItems.size > 100) historyItems.removeLast()
         runOnUiThread {
             historyLayout.removeAllViews()
             for (item in historyItems) {
                 val view = layoutInflater.inflate(R.layout.history_item, historyLayout, false)
                 view.findViewById<TextView>(R.id.historySource).text = "[${item.sourceLang}] ${item.source}"
-                view.findViewById<TextView>(R.id.historyTarget).text = "[${item.targetLang}] ${item.target}"
+                view.findViewById<TextView>(R.id.historyTarget).text = "[${item.targetLang}] ${item.target} (${item.asr})"
                 view.findViewById<TextView>(R.id.historyTime).text = item.time
                 historyLayout.addView(view)
             }
         }
+    }
+
+    private fun createWavFile(file: File, pcmData: ByteArray) {
+        val totalSize = 44 + pcmData.size
+        FileOutputStream(file).use { fos ->
+            val h = ByteArray(44)
+            h[0] = 'R'.code.toByte(); h[1] = 'I'.code.toByte(); h[2] = 'F'.code.toByte(); h[3] = 'F'.code.toByte()
+            writeIntLE(h, 4, totalSize - 8)
+            h[8] = 'W'.code.toByte(); h[9] = 'A'.code.toByte(); h[10] = 'V'.code.toByte(); h[11] = 'E'.code.toByte()
+            h[12] = 'f'.code.toByte(); h[13] = 'm'.code.toByte(); h[14] = 't'.code.toByte(); h[15] = ' '.code.toByte()
+            writeIntLE(h, 16, 16); writeShortLE(h, 20, 1); writeShortLE(h, 22, 1)
+            writeIntLE(h, 24, sampleRate); writeIntLE(h, 28, sampleRate * 2); writeShortLE(h, 32, 2); writeShortLE(h, 34, 16)
+            h[36] = 'd'.code.toByte(); h[37] = 'a'.code.toByte(); h[38] = 't'.code.toByte(); h[39] = 'a'.code.toByte()
+            writeIntLE(h, 40, pcmData.size)
+            fos.write(h); fos.write(pcmData)
+        }
+    }
+
+    private fun writeIntLE(b: ByteArray, o: Int, v: Int) {
+        b[o] = (v and 0xFF).toByte(); b[o + 1] = ((v shr 8) and 0xFF).toByte()
+        b[o + 2] = ((v shr 16) and 0xFF).toByte(); b[o + 3] = ((v shr 24) and 0xFF).toByte()
+    }
+
+    private fun writeShortLE(b: ByteArray, o: Int, v: Int) {
+        b[o] = (v and 0xFF).toByte(); b[o + 1] = ((v shr 8) and 0xFF).toByte()
     }
 
     private fun calculateRMS(buffer: ShortArray, length: Int): Double {
@@ -365,16 +410,16 @@ class MainActivity : AppCompatActivity() {
 
     private fun checkPermission() {
         if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO)
-            != PackageManager.PERMISSION_GRANTED
-        ) {
+            != PackageManager.PERMISSION_GRANTED)
             ActivityCompat.requestPermissions(this, arrayOf(Manifest.permission.RECORD_AUDIO), 100)
-        }
     }
 
     override fun onDestroy() {
         super.onDestroy()
-        isRecording = false
-        recordingJob?.cancel()
-        scope.cancel()
+        isRecording = false; recordingJob?.cancel()
+        segmentProcessJob?.cancel(); scope.cancel()
+        if (llamaContext != 0L) {
+            try { llamaRelease(llamaContext) } catch (_: Exception) {}
+        }
     }
 }

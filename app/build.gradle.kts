@@ -9,10 +9,14 @@ android {
 
     defaultConfig {
         applicationId = "com.translator.app"
-        minSdk = 31
-        targetSdk = 34
-        versionCode = 3
-        versionName = "3.0.0"
+        minSdk = 24
+        targetSdk = 33
+        versionCode = 2
+        versionName = "2.0.0"
+
+        ndk {
+            abiFilters += listOf("arm64-v8a", "armeabi-v7a")
+        }
     }
 
     buildTypes {
@@ -32,6 +36,12 @@ android {
         jvmTarget = "17"
     }
 
+    sourceSets {
+        getByName("main") {
+            jniLibs.srcDirs("src/main/jniLibs")
+        }
+    }
+
     packaging {
         resources {
             excludes += "/META-INF/{AL2.0,LGPL2.1}"
@@ -45,7 +55,9 @@ dependencies {
     implementation("androidx.activity:activity-ktx:1.8.2")
     implementation("com.google.android.material:material:1.11.0")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.7.3")
+    implementation("com.squareup.okhttp3:okhttp:4.12.0")
+    implementation("org.json:json:20231013")
 
-    // ML Kit GenAI Prompt API — 调用本地 Gemma 4 模型
-    implementation("com.google.mlkit:genai-prompt:1.0.0-beta2")
+    // llama.cpp Android 库 — 预编译 AAR
+    implementation("com.agent.coder:llama:1.0.0") { isTransitive = true }
 }
