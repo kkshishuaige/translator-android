@@ -18,43 +18,45 @@ static struct whisper_context *g_ctx = nullptr;
 extern "C" {
 
 /**
- * 初始化 Whisper 模型（从文件路径）
+ * 初始化 Whisper 模型（从内存字节数组）
+ * 使用此方式绕开 NDK fopen 的 SELinux 限制
  */
 JNIEXPORT jboolean JNICALL
-Java_com_translator_app_WhisperModel_nativeInit(JNIEnv *env, jclass clazz, jstring modelPath) {
+Java_com_translator_app_WhisperModel_nativeInitFromBytes(JNIEnv *env, jclass clazz,
+                                                          jbyteArray modelData) {
     if (g_ctx != nullptr) {
         whisper_free(g_ctx);
         g_ctx = nullptr;
     }
 
-    const char *path = env->GetStringUTFChars(modelPath, nullptr);
-    LOGI("Loading model: %s", path);
+    jsize len = env->GetArrayLength(modelData);
+    LOGI("Loading model from byte array, size: %d bytes (%.1f MB)", len, len / (1024.0 * 1024.0));
 
-    // 先尝试用 C fopen 验证文件是否可读
-    FILE *fp = fopen(path, "rb");
-    if (fp == nullptr) {
-        LOGE("Cannot open model file: %s (errno=%d, %s)", path, errno, strerror(errno));
-        env->ReleaseStringUTFChars(modelPath, path);
+    if (len <= 0) {
+        LOGE("Empty model data");
         return JNI_FALSE;
     }
-    fseek(fp, 0, SEEK_END);
-    long fsize = ftell(fp);
-    fclose(fp);
-    LOGI("Model file size: %ld bytes (%.1f MB)", fsize, fsize / (1024.0 * 1024.0));
 
+    jbyte *data = env->GetByteArrayElements(modelData, nullptr);
+    if (data == nullptr) {
+        LOGE("Failed to get model bytes from JNI");
+        return JNI_FALSE;
+    }
+
+    // whisper_init_from_buffer_with_params 内部会拷贝数据，所以释放缓冲区是安全的
     struct whisper_context_params cparams = whisper_context_default_params();
-    cparams.use_gpu = false;  // Android CPU only
+    cparams.use_gpu = false;
 
-    g_ctx = whisper_init_from_file_with_params(path, cparams);
+    g_ctx = whisper_init_from_buffer_with_params(data, (size_t)len, cparams);
 
-    env->ReleaseStringUTFChars(modelPath, path);
+    env->ReleaseByteArrayElements(modelData, data, JNI_ABORT);
 
     if (g_ctx == nullptr) {
-        LOGE("whisper_init_from_file_with_params returned NULL");
+        LOGE("whisper_init_from_buffer_with_params returned NULL");
         return JNI_FALSE;
     }
 
-    LOGI("Model loaded successfully");
+    LOGI("Model loaded successfully from buffer");
     return JNI_TRUE;
 }
 
