@@ -49,6 +49,7 @@ include_directories(
     ${CMAKE_CURRENT_SOURCE_DIR}/include
     ${CMAKE_CURRENT_SOURCE_DIR}/ggml/include
     ${CMAKE_CURRENT_SOURCE_DIR}/ggml/src
+    ${CMAKE_CURRENT_SOURCE_DIR}/ggml/src/ggml-cpu
 )
 
 # 构建共享库
