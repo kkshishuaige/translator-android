@@ -3,6 +3,9 @@
 #include <cstring>
 #include <vector>
 #include <string>
+#include <cstdio>   // for fopen/fseek/ftell
+#include <cerrno>
+#include <cstring>   // for strerror
 #include "whisper.h"
 
 #define LOG_TAG "WhisperJNI"
@@ -15,7 +18,7 @@ static struct whisper_context *g_ctx = nullptr;
 extern "C" {
 
 /**
- * 初始化 Whisper 模型
+ * 初始化 Whisper 模型（从文件路径）
  */
 JNIEXPORT jboolean JNICALL
 Java_com_translator_app_WhisperModel_nativeInit(JNIEnv *env, jclass clazz, jstring modelPath) {
@@ -27,6 +30,18 @@ Java_com_translator_app_WhisperModel_nativeInit(JNIEnv *env, jclass clazz, jstri
     const char *path = env->GetStringUTFChars(modelPath, nullptr);
     LOGI("Loading model: %s", path);
 
+    // 先尝试用 C fopen 验证文件是否可读
+    FILE *fp = fopen(path, "rb");
+    if (fp == nullptr) {
+        LOGE("Cannot open model file: %s (errno=%d, %s)", path, errno, strerror(errno));
+        env->ReleaseStringUTFChars(modelPath, path);
+        return JNI_FALSE;
+    }
+    fseek(fp, 0, SEEK_END);
+    long fsize = ftell(fp);
+    fclose(fp);
+    LOGI("Model file size: %ld bytes (%.1f MB)", fsize, fsize / (1024.0 * 1024.0));
+
     struct whisper_context_params cparams = whisper_context_default_params();
     cparams.use_gpu = false;  // Android CPU only
 
@@ -35,7 +50,7 @@ Java_com_translator_app_WhisperModel_nativeInit(JNIEnv *env, jclass clazz, jstri
     env->ReleaseStringUTFChars(modelPath, path);
 
     if (g_ctx == nullptr) {
-        LOGE("Failed to load model");
+        LOGE("whisper_init_from_file_with_params returned NULL");
         return JNI_FALSE;
     }
 
