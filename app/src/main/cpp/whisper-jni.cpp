@@ -68,10 +68,8 @@ Java_com_translator_app_WhisperModel_nativeTranscribe(JNIEnv *env, jclass clazz,
     wparams.print_timestamps = false;
     wparams.print_special    = false;
     wparams.n_threads        = 4;
-    wparams.speed_up         = false;
     wparams.debug_mode       = false;
     wparams.suppress_blank   = true;
-    wparams.suppress_non_speech_tokens = true;
     wparams.tdrz_enable      = false;
 
     // 语言设置
