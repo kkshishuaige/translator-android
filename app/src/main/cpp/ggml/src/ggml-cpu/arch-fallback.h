@@ -1,8 +1,10 @@
 
 #pragma once
 
-// Force generic implementations on Android (macros will not be defined by arch .c/.cpp)
-#if defined(GGML_CPU_GENERIC) || defined(__aarch64__) || defined(__arm__) || defined(_M_ARM) || defined(_M_ARM64)
+// Rename `_generic` functions if no native implementation is available.
+// This effectively selects the generic implementation.
+
+#if defined(GGML_CPU_GENERIC)
 // quants.c
 #define quantize_row_q8_0_generic quantize_row_q8_0
 #define quantize_row_q8_1_generic quantize_row_q8_1

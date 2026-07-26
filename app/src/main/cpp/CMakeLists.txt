@@ -3,68 +3,52 @@ project("whisper_translator")
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
-set(CMAKE_C_STANDARD 11)
 
-# 优化选项：Android 平台不需要 AVX 等 x86 指令
-if(ANDROID_ABI STREQUAL "arm64-v8a")
-    set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -march=armv8.4a+dotprod+fp16 -O3 -DGGML_USE_LLAMAFILE=0")
-    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -march=armv8.4a+dotprod+fp16 -O3 -DGGML_USE_LLAMAFILE=0")
-elseif(ANDROID_ABI STREQUAL "armeabi-v7a")
-    set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -mfpu=neon -mfloat-abi=softfp -O3")
-    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -mfpu=neon -mfloat-abi=softfp -O3")
-else()
-    set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -O3")
-    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -O3")
-endif()
+# 指向 whisper.cpp 源码根目录
+set(WHISPER_LIB_DIR ${CMAKE_CURRENT_SOURCE_DIR})
 
-# 禁用不必要的加速模块
-add_definitions(-DGGML_USE_CPU=1)
-add_definitions(-DGGML_CPU_EXTRA_DISABLE=1)
+# 定义 Whisper 版本
+set(WHISPER_VERSION "1.9.1")
 
-# 源文件
-set(WHISPER_SOURCES
+# 构建 whisper 库（只编译 whisper.cpp + JNI，不手动编译 ggml）
+add_library(
+    whisper
+    SHARED
     whisper.cpp
-    ggml/src/ggml.c
-    ggml/src/ggml.cpp
-    ggml/src/ggml-alloc.c
-    ggml/src/ggml-backend.cpp
-    ggml/src/ggml-backend-reg.cpp
-    ggml/src/ggml-backend-meta.cpp
-    ggml/src/ggml-quants.c
-    ggml/src/ggml-threading.cpp
     whisper-jni.cpp
 )
 
-# ggml-cpu 所有 .c/.cpp（递归搜索子目录）
-file(GLOB_RECURSE GGML_CPU_SOURCES
-    "${CMAKE_CURRENT_SOURCE_DIR}/ggml/src/ggml-cpu/*.c"
-    "${CMAKE_CURRENT_SOURCE_DIR}/ggml/src/ggml-cpu/*.cpp"
-)
+# 让 GGML 用自己的 CMake 编译（官方推荐方式）
+FetchContent_Declare(ggml SOURCE_DIR ${WHISPER_LIB_DIR}/ggml)
+set(GGML_CPU_EXTRA_DISABLE ON)
+set(GGML_USE_CPU ON)
+set(GGML_BUILD_EXAMPLES OFF)
+set(GGML_BUILD_TESTS OFF)
+FetchContent_MakeAvailable(ggml)
 
-list(APPEND WHISPER_SOURCES ${GGML_CPU_SOURCES})
-
-# 头文件路径（含内部头文件目录）
-include_directories(
-    ${CMAKE_CURRENT_SOURCE_DIR}
-    ${CMAKE_CURRENT_SOURCE_DIR}/include
-    ${CMAKE_CURRENT_SOURCE_DIR}/ggml/include
-    ${CMAKE_CURRENT_SOURCE_DIR}/ggml/src
-    ${CMAKE_CURRENT_SOURCE_DIR}/ggml/src/ggml-cpu
-)
-
-# 构建共享库
-add_library(whisper SHARED ${WHISPER_SOURCES})
-
-# 版本宏定义（用 add_definitions 避免 Ninja 引号转义问题）
-add_definitions(-DGGML_VERSION="0.16.0")
-add_definitions(-DGGML_COMMIT="unknown")
-add_definitions(-DWHISPER_VERSION="1.9.1")
-
-# 链接系统库
+# 链接
 target_link_libraries(whisper
     log
     android
-    c
-    m
-    z
+    ggml-base
 )
+
+# 编译选项
+target_include_directories(whisper PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+)
+
+target_compile_definitions(whisper PRIVATE
+    GGML_USE_CPU=1
+    GGML_CPU_EXTRA_DISABLE=1
+    WHISPER_VERSION="${WHISPER_VERSION}"
+)
+
+if (NOT ${CMAKE_BUILD_TYPE} STREQUAL "Debug")
+    target_compile_options(whisper PRIVATE -O3)
+    target_compile_options(whisper PRIVATE -fvisibility=hidden -fvisibility-inlines-hidden)
+    target_compile_options(whisper PRIVATE -ffunction-sections -fdata-sections)
+    target_link_options(whisper PRIVATE -Wl,--gc-sections)
+    target_link_options(whisper PRIVATE -Wl,--exclude-libs,ALL)
+endif()
