@@ -62,12 +62,54 @@
                 android:textColor="#E0E0E0" />
         </LinearLayout>
 
+        <!-- 模型路径输入 -->
+        <androidx.cardview.widget.CardView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="12dp"
+            app:cardBackgroundColor="#1A1A24"
+            app:cardCornerRadius="10dp"
+            app:cardElevation="0dp"
+            app:strokeColor="#2A2A3A"
+            app:strokeWidth="1dp">
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal"
+                android:padding="12dp">
+
+                <EditText
+                    android:id="@+id/modelPathEdit"
+                    android:layout_width="0dp"
+                    android:layout_height="44dp"
+                    android:layout_weight="1"
+                    android:background="@drawable/spinner_bg"
+                    android:hint="模型文件路径"
+                    android:padding="8dp"
+                    android:textColor="#E0E0E0"
+                    android:textColorHint="#555555"
+                    android:textSize="12sp" />
+
+                <Button
+                    android:id="@+id/loadModelBtn"
+                    android:layout_width="wrap_content"
+                    android:layout_height="44dp"
+                    android:layout_marginStart="8dp"
+                    android:backgroundTint="#4A9EFF"
+                    android:paddingHorizontal="16dp"
+                    android:text="加载模型"
+                    android:textColor="#FFFFFF"
+                    android:textSize="13sp" />
+            </LinearLayout>
+        </androidx.cardview.widget.CardView>
+
         <Button
             android:id="@+id/recordBtn"
             android:layout_width="wrap_content"
             android:layout_height="56dp"
             android:layout_gravity="center"
-            android:layout_marginTop="20dp"
+            android:layout_marginTop="12dp"
             android:backgroundTint="#4A9EFF"
             android:paddingHorizontal="40dp"
             android:text="🎤 开始同传"

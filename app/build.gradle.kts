@@ -11,8 +11,14 @@ android {
         applicationId = "com.translator.app"
         minSdk = 26
         targetSdk = 35
-        versionCode = 3
-        versionName = "3.0.0"
+        versionCode = 4
+        versionName = "3.1.0"
+
+        ndk {
+            // 只编译 arm64-v8a（支持所有现代手机）
+            // 如果需要在旧设备上运行，可以加 armeabi-v7a
+            abiFilters += listOf("arm64-v8a")
+        }
     }
 
     buildTypes {
@@ -24,12 +30,22 @@ android {
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"))
         }
     }
+
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
     }
+
     kotlinOptions {
         jvmTarget = "17"
+    }
+
+    // NDK / CMake 配置
+    externalNativeBuild {
+        cmake {
+            path = file("src/main/cpp/CMakeLists.txt")
+            version = "3.22.1"
+        }
     }
 
     packaging {
