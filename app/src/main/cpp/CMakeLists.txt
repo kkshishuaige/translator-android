@@ -37,13 +37,16 @@ add_subdirectory(ggml)
 target_link_libraries(whisper
     log
     android
-    ggml-base
+    ggml
 )
 
 # 编译选项
 target_include_directories(whisper PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}
     ${CMAKE_CURRENT_SOURCE_DIR}/include
+    ${CMAKE_CURRENT_SOURCE_DIR}/ggml/include
+    ${CMAKE_CURRENT_SOURCE_DIR}/ggml/src
+    ${CMAKE_CURRENT_SOURCE_DIR}/ggml/src/ggml-cpu
 )
 
 target_compile_definitions(whisper PRIVATE
