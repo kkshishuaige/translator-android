@@ -32,16 +32,16 @@ set(WHISPER_SOURCES
     ggml/src/ggml-backend-meta.cpp
     ggml/src/ggml-quants.c
     ggml/src/ggml-threading.cpp
-    ggml/src/ggml-cpu/ggml-cpu.cpp
-    ggml/src/ggml-cpu/ops.cpp
-    ggml/src/ggml-cpu/binary-ops.cpp
-    ggml/src/ggml-cpu/unary-ops.cpp
-    ggml/src/ggml-cpu/traits.cpp
-    ggml/src/ggml-cpu/vec.cpp
-    ggml/src/ggml-cpu/repack.cpp
-    ggml/src/ggml-cpu/hbm.cpp
     whisper-jni.cpp
 )
+
+# ggml-cpu 所有 .c/.cpp（递归搜索子目录）
+file(GLOB_RECURSE GGML_CPU_SOURCES
+    "${CMAKE_CURRENT_SOURCE_DIR}/ggml/src/ggml-cpu/*.c"
+    "${CMAKE_CURRENT_SOURCE_DIR}/ggml/src/ggml-cpu/*.cpp"
+)
+
+list(APPEND WHISPER_SOURCES ${GGML_CPU_SOURCES})
 
 # 头文件路径（含内部头文件目录）
 include_directories(
