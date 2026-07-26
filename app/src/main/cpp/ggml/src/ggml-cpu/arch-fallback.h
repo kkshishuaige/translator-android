@@ -1,10 +1,11 @@
 
 #pragma once
 
-// Rename `_generic` functions if no native implementation is available.
-// This effectively selects the generic implementation.
-
-#if defined(GGML_CPU_GENERIC)
+// Force generic implementations for all architectures on Android
+// (Android doesn't ship with arch-specific optimized .c/.cpp files)
+#if !defined(GGML_CPU_GENERIC)
+#define GGML_CPU_GENERIC
+#endif
 // quants.c
 #define quantize_row_q8_0_generic quantize_row_q8_0
 #define quantize_row_q8_1_generic quantize_row_q8_1
