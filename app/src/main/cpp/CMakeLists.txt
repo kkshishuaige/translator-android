@@ -19,12 +19,19 @@ add_library(
 )
 
 # 让 GGML 用自己的 CMake 编译（官方推荐方式）
-FetchContent_Declare(ggml SOURCE_DIR ${WHISPER_LIB_DIR}/ggml)
+# 注：ggml/ 是项目子目录，直接用 add_subdirectory 而不是 FetchContent
 set(GGML_CPU_EXTRA_DISABLE ON)
 set(GGML_USE_CPU ON)
 set(GGML_BUILD_EXAMPLES OFF)
 set(GGML_BUILD_TESTS OFF)
-FetchContent_MakeAvailable(ggml)
+set(GGML_BUILD_CUDA OFF)
+set(GGML_BUILD_METAL OFF)
+set(GGML_BUILD_VULKAN OFF)
+set(GGML_BUILD_OPENCL OFF)
+set(GGML_BUILD_HEXAGON OFF)
+set(GGML_BUILD_VIRTGPU OFF)
+set(GGML_BUILD_OPENVINO OFF)
+add_subdirectory(ggml)
 
 # 链接
 target_link_libraries(whisper
