@@ -55,12 +55,10 @@ include_directories(
 # 构建共享库
 add_library(whisper SHARED ${WHISPER_SOURCES})
 
-# 版本宏定义（必须在 add_library 之后）
-target_compile_definitions(whisper PRIVATE
-    GGML_VERSION="0.16.0"
-    GGML_COMMIT="unknown"
-    WHISPER_VERSION="1.9.1"
-)
+# 版本宏定义（用 add_definitions 避免 Ninja 引号转义问题）
+add_definitions(-DGGML_VERSION="0.16.0")
+add_definitions(-DGGML_COMMIT="unknown")
+add_definitions(-DWHISPER_VERSION="1.9.1")
 
 # 链接系统库
 target_link_libraries(whisper
