@@ -270,8 +270,15 @@ void ggml_vec_dot_f16(int n, float * GGML_RESTRICT s, size_t bs, ggml_fp16_t * G
 
     ggml_float sumf = 0.0;
 
+    // 强制标量路径（无条件，绕过所有 SIMD/NEON 路径）
+    // 该设备上的 FP16/SIMD 指令会导致 __memcpy / SIGSEGV 崩溃
+    for (int i = 0; i < n; ++i) {
+        sumf += (ggml_float)(GGML_CPU_FP16_TO_FP32(x[i]) * GGML_CPU_FP16_TO_FP32(y[i]));
+    }
+    *s = sumf;
+    return;
 
-#if defined(GGML_SIMD)
+#if defined(GGML_SIMD)   // 以下代码实际不会执行，保留原样以防编译报错
     #if defined(__ARM_FEATURE_SVE)
         const int ggml_f16_epr = svcnth();
         const int ggml_f16_step = 8 * ggml_f16_epr;

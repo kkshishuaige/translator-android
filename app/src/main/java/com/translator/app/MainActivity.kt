@@ -13,6 +13,9 @@ import androidx.core.content.ContextCompat
 import com.google.mlkit.genai.prompt.Generation
 import kotlinx.coroutines.*
 import java.io.File
+import java.io.FileOutputStream
+import java.net.HttpURLConnection
+import java.net.URL
 import java.text.SimpleDateFormat
 import java.util.*
 import kotlin.math.abs
@@ -27,8 +30,12 @@ class MainActivity : AppCompatActivity() {
     private lateinit var sourceLang: Spinner
     private lateinit var targetLang: Spinner
     private lateinit var historyLayout: LinearLayout
-    private lateinit var modelPathEdit: EditText
-    private lateinit var loadModelBtn: Button
+    private lateinit var downloadModelBtn: Button
+    private lateinit var downloadProgress: ProgressBar
+
+    // 模型文件（使用 tiny 模型 75MB，base 141MB 在部分设备上有空指针崩溃）
+    private val modelFileName = "ggml-tiny.bin"
+    private val modelDownloadUrl = "https://hf-mirror.com/ggerganov/whisper.cpp/resolve/main/ggml-tiny.bin"
 
     private var isRecording = false
     private var whisperReady = false
@@ -86,8 +93,8 @@ class MainActivity : AppCompatActivity() {
         sourceLang = findViewById(R.id.sourceLang)
         targetLang = findViewById(R.id.targetLang)
         historyLayout = findViewById(R.id.historyLayout)
-        modelPathEdit = findViewById(R.id.modelPathEdit)
-        loadModelBtn = findViewById(R.id.loadModelBtn)
+        downloadModelBtn = findViewById(R.id.downloadModelBtn)
+        downloadProgress = findViewById(R.id.downloadProgress)
 
         val names = languages.map { it.displayName }
         sourceLang.adapter = ArrayAdapter(this, android.R.layout.simple_spinner_dropdown_item, names)
@@ -95,17 +102,14 @@ class MainActivity : AppCompatActivity() {
         sourceLang.setSelection(0)
         targetLang.setSelection(1)
 
-        // 默认模型路径（手机存储）
-        modelPathEdit.setText("/storage/emulated/0/Download/ggml-base.bin")
-
         checkPermission()
 
         // 加载 Gemma 4（ML Kit 翻译）
         initGemma4()
 
-        // 加载模型按钮
-        loadModelBtn.setOnClickListener {
-            loadWhisperModel()
+        // 下载/加载模型
+        downloadModelBtn.setOnClickListener {
+            startModelDownload()
         }
 
         recordBtn.setOnClickListener {
@@ -114,6 +118,91 @@ class MainActivity : AppCompatActivity() {
                 return@setOnClickListener
             }
             if (isRecording) stopRecording() else startRecording()
+        }
+
+        // 启动时检查是否已有模型
+        checkExistingModel()
+    }
+
+    /**
+     * 检查 app 私有目录是否已有模型文件，有则自动加载
+     */
+    private fun checkExistingModel() {
+        val modelFile = File(filesDir, modelFileName)
+        if (modelFile.exists() && modelFile.length() > 1000000) {
+            modelStatusText.text = "✅ 模型已存在，正在加载…"
+            downloadModelBtn.text = "⏳ 加载中…"
+            downloadModelBtn.isEnabled = false
+            loadWhisperModel(modelFile.absolutePath)
+        } else {
+            modelStatusText.text = "需要下载语音模型 (148MB)"
+        }
+    }
+
+    /**
+     * 开始下载模型
+     */
+    private fun startModelDownload() {
+        downloadModelBtn.isEnabled = false
+        downloadProgress.visibility = android.view.View.VISIBLE
+        downloadProgress.progress = 0
+        modelStatusText.text = "⏳ 准备下载…"
+        downloadModelBtn.text = "⏳ 下载中…"
+
+        scope.launch(Dispatchers.IO) {
+            try {
+                val url = URL(modelDownloadUrl)
+                val conn = url.openConnection() as HttpURLConnection
+                conn.connectTimeout = 30000
+                conn.requestMethod = "GET"
+                conn.connect()
+
+                val totalSize = conn.contentLengthLong
+                val inputStream = conn.inputStream
+                val targetFile = File(filesDir, modelFileName)
+                val outputStream = FileOutputStream(targetFile)
+
+                val buffer = ByteArray(8192)
+                var bytesRead: Int
+                var totalRead: Long = 0
+                var lastPercent = 0
+
+                while (inputStream.read(buffer).also { bytesRead = it } != -1) {
+                    outputStream.write(buffer, 0, bytesRead)
+                    totalRead += bytesRead
+
+                    if (totalSize > 0) {
+                        val percent = ((totalRead * 100) / totalSize).toInt()
+                        if (percent != lastPercent) {
+                            lastPercent = percent
+                            val mbRead = totalRead / (1024 * 1024)
+                            val mbTotal = totalSize / (1024 * 1024)
+                            runOnUiThread {
+                                downloadProgress.progress = percent
+                                modelStatusText.text = "📥 下载中 $percent% (${mbRead}MB / ${mbTotal}MB)"
+                            }
+                        }
+                    }
+                }
+
+                outputStream.close()
+                inputStream.close()
+
+                runOnUiThread {
+                    modelStatusText.text = "✅ 下载完成！正在加载模型…"
+                    downloadProgress.progress = 100
+                }
+
+                // 自动加载模型
+                loadWhisperModel(targetFile.absolutePath)
+            } catch (e: Exception) {
+                runOnUiThread {
+                    modelStatusText.text = "❌ 下载失败：${e.message}"
+                    downloadModelBtn.isEnabled = true
+                    downloadModelBtn.text = "📥 重新下载 (148MB)"
+                    downloadProgress.visibility = android.view.View.GONE
+                }
+            }
         }
     }
 
@@ -139,36 +228,33 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private fun loadWhisperModel() {
-        val path = modelPathEdit.text.toString().trim()
-        if (path.isEmpty()) {
-            Toast.makeText(this, "请输入模型文件路径", Toast.LENGTH_SHORT).show()
-            return
-        }
-
+    private fun loadWhisperModel(path: String) {
         val modelFile = File(path)
         if (!modelFile.exists()) {
-            Toast.makeText(this, "模型文件不存在：$path", Toast.LENGTH_SHORT).show()
+            modelStatusText.text = "❌ 模型文件不存在：$path"
+            downloadModelBtn.isEnabled = true
+            downloadModelBtn.text = "📥 下载模型 (148MB)"
             return
         }
 
-        loadModelBtn.isEnabled = false
-        loadModelBtn.text = "加载中…"
-        statusText.text = "⏳ 加载语音模型…"
+        statusText.text = "⏳ 加载语音模型…（148MB，请稍候）"
 
         scope.launch(Dispatchers.IO) {
             val success = WhisperModel.load(path)
             runOnUiThread {
-                loadModelBtn.isEnabled = true
-                loadModelBtn.text = "加载模型"
                 if (success) {
                     whisperReady = true
+                    downloadModelBtn.text = "✅ 模型已加载"
+                    modelStatusText.text = "🟢 语音模型就绪"
                     statusText.text = "语音模型已加载 ✅"
                     Toast.makeText(this@MainActivity, "模型加载成功！", Toast.LENGTH_SHORT).show()
                     updateUiStatus()
                 } else {
+                    downloadModelBtn.isEnabled = true
+                    downloadModelBtn.text = "📥 下载模型 (148MB)"
+                    modelStatusText.text = "❌ 模型加载失败，请重新下载"
                     statusText.text = "❌ 模型加载失败"
-                    Toast.makeText(this@MainActivity, "模型加载失败，请检查文件", Toast.LENGTH_SHORT).show()
+                    Toast.makeText(this@MainActivity, "模型加载失败，请检查 logcat", Toast.LENGTH_LONG).show()
                 }
             }
         }
@@ -405,11 +491,6 @@ class MainActivity : AppCompatActivity() {
             != PackageManager.PERMISSION_GRANTED) permissions.add(Manifest.permission.RECORD_AUDIO)
         if (ContextCompat.checkSelfPermission(this, Manifest.permission.INTERNET)
             != PackageManager.PERMISSION_GRANTED) permissions.add(Manifest.permission.INTERNET)
-        // 读写存储，用于读取模型文件
-        if (ContextCompat.checkSelfPermission(this, Manifest.permission.READ_EXTERNAL_STORAGE)
-            != PackageManager.PERMISSION_GRANTED && android.os.Build.VERSION.SDK_INT < 33) {
-            permissions.add(Manifest.permission.READ_EXTERNAL_STORAGE)
-        }
 
         if (permissions.isNotEmpty())
             ActivityCompat.requestPermissions(this, permissions.toTypedArray(), 100)

@@ -62,7 +62,7 @@
                 android:textColor="#E0E0E0" />
         </LinearLayout>
 
-        <!-- 模型路径输入 -->
+        <!-- 模型管理 -->
         <androidx.cardview.widget.CardView
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
@@ -76,31 +76,36 @@
             <LinearLayout
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:orientation="horizontal"
+                android:orientation="vertical"
                 android:padding="12dp">
 
-                <EditText
-                    android:id="@+id/modelPathEdit"
-                    android:layout_width="0dp"
-                    android:layout_height="44dp"
-                    android:layout_weight="1"
-                    android:background="@drawable/spinner_bg"
-                    android:hint="模型文件路径"
-                    android:padding="8dp"
-                    android:textColor="#E0E0E0"
-                    android:textColorHint="#555555"
-                    android:textSize="12sp" />
-
                 <Button
-                    android:id="@+id/loadModelBtn"
-                    android:layout_width="wrap_content"
+                    android:id="@+id/downloadModelBtn"
+                    android:layout_width="match_parent"
                     android:layout_height="44dp"
-                    android:layout_marginStart="8dp"
                     android:backgroundTint="#4A9EFF"
-                    android:paddingHorizontal="16dp"
-                    android:text="加载模型"
+                    android:text="📥 下载模型 (148MB)"
                     android:textColor="#FFFFFF"
-                    android:textSize="13sp" />
+                    android:textSize="14sp" />
+
+                <ProgressBar
+                    android:id="@+id/downloadProgress"
+                    style="?android:attr/progressBarStyleHorizontal"
+                    android:layout_width="match_parent"
+                    android:layout_height="8dp"
+                    android:layout_marginTop="8dp"
+                    android:visibility="gone"
+                    android:progressTint="#4A9EFF" />
+
+                <TextView
+                    android:id="@+id/modelStatusText"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="6dp"
+                    android:gravity="center"
+                    android:text="⏳ 初始化 Gemma 4…"
+                    android:textColor="#FFA500"
+                    android:textSize="12sp" />
             </LinearLayout>
         </androidx.cardview.widget.CardView>
 
@@ -116,16 +121,6 @@
             android:textColor="#FFFFFF"
             android:textSize="16sp"
             android:textStyle="bold" />
-
-        <TextView
-            android:id="@+id/modelStatusText"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="8dp"
-            android:gravity="center"
-            android:text="⏳ 初始化 Gemma 4…"
-            android:textColor="#FFA500"
-            android:textSize="12sp" />
 
         <TextView
             android:id="@+id/statusText"

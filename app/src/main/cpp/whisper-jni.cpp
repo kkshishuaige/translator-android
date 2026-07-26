@@ -18,8 +18,38 @@ static struct whisper_context *g_ctx = nullptr;
 extern "C" {
 
 /**
+ * 初始化 Whisper 模型（从文件路径）
+ * 模型在 app 私有目录下，不受 SELinux 限制
+ */
+JNIEXPORT jboolean JNICALL
+Java_com_translator_app_WhisperModel_nativeInit(JNIEnv *env, jclass clazz, jstring modelPath) {
+    if (g_ctx != nullptr) {
+        whisper_free(g_ctx);
+        g_ctx = nullptr;
+    }
+
+    const char *path = env->GetStringUTFChars(modelPath, nullptr);
+    LOGI("Loading model from file: %s", path);
+
+    struct whisper_context_params cparams = whisper_context_default_params();
+    cparams.use_gpu = false;
+
+    g_ctx = whisper_init_from_file_with_params(path, cparams);
+
+    env->ReleaseStringUTFChars(modelPath, path);
+
+    if (g_ctx == nullptr) {
+        LOGE("whisper_init_from_file_with_params returned NULL");
+        return JNI_FALSE;
+    }
+
+    LOGI("Model loaded successfully");
+    return JNI_TRUE;
+}
+
+/**
  * 初始化 Whisper 模型（从内存字节数组）
- * 使用此方式绕开 NDK fopen 的 SELinux 限制
+ * 备用方式，用于内存充足的设备
  */
 JNIEXPORT jboolean JNICALL
 Java_com_translator_app_WhisperModel_nativeInitFromBytes(JNIEnv *env, jclass clazz,
@@ -78,13 +108,13 @@ Java_com_translator_app_WhisperModel_nativeTranscribe(JNIEnv *env, jclass clazz,
     // 获取语言
     const char *langStr = env->GetStringUTFChars(lang, nullptr);
 
-    // 配置参数
+    // 配置参数 - 单线程推理（多线程在部分设备上偶现 __memcpy 崩溃）
     struct whisper_full_params wparams = whisper_full_default_params(WHISPER_SAMPLING_GREEDY);
     wparams.print_realtime   = false;
     wparams.print_progress   = false;
     wparams.print_timestamps = false;
     wparams.print_special    = false;
-    wparams.n_threads        = 4;
+    wparams.n_threads        = 1;
     wparams.debug_mode       = false;
     wparams.suppress_blank   = true;
     wparams.tdrz_enable      = false;

@@ -6,6 +6,13 @@
 #include "ggml-alloc.h"
 #include "ggml-backend.h"
 
+#ifdef __ANDROID__
+#include <android/log.h>
+#define LOGD(...) __android_log_print(ANDROID_LOG_DEBUG, "WhisperModelLoad", __VA_ARGS__)
+#else
+#define LOGD(...) fprintf(stdout, ##__VA_ARGS__); fprintf(stdout, "\n")
+#endif
+
 #ifdef WHISPER_USE_COREML
 #include "coreml/whisper-encoder.h"
 #endif
@@ -1950,6 +1957,25 @@ static bool whisper_model_load(struct whisper_model_loader * loader, whisper_con
         ggml_backend_buffer_set_usage(buf, GGML_BACKEND_BUFFER_USAGE_WEIGHTS);
     }
 
+    // --- DEBUG: 打印关键 tensor 的 data 指针，检查分配是否正常 ---
+    {
+        auto it_conv1 = model.tensors.find("encoder.conv1.weight");
+        if (it_conv1 != model.tensors.end()) {
+            auto t = it_conv1->second;
+            LOGD("tensor 'encoder.conv1.weight' data=%p buffer=%p size=%zu", t->data, (void*)t->buffer, ggml_nbytes(t));
+        }
+        // 打印几个其他关键 tensor
+        for (auto & kv : model.tensors) {
+            if (kv.first.find("encoder.conv") != std::string::npos ||
+                kv.first.find("encoder.ln") != std::string::npos ||
+                kv.first.find("decoder.ln") != std::string::npos) {
+                auto t = kv.second;
+                LOGD("tensor '%s' data=%p", kv.first.c_str(), t->data);
+            }
+        }
+    }
+    // --- DEBUG END ---
+
     wctx.t_load_us = ggml_time_us() - t_start_us;
 
     return true;
@@ -2370,9 +2396,37 @@ static bool whisper_encode_internal(
 
         ggml_cgraph * gf = whisper_build_graph_conv(wctx, wstate);
 
+        // DEBUG: 检查 conv 权重的 data 指针
+        {
+            auto it = wctx.model.tensors.find("encoder.conv1.weight");
+            if (it != wctx.model.tensors.end()) {
+                LOGD("BEFORE sched_alloc: conv1.weight data=%p buffer=%p",
+                     it->second->data, (void*)it->second->buffer);
+            }
+            auto it2 = wctx.model.tensors.find("encoder.conv2.weight");
+            if (it2 != wctx.model.tensors.end()) {
+                LOGD("BEFORE sched_alloc: conv2.weight data=%p buffer=%p",
+                     it2->second->data, (void*)it2->second->buffer);
+            }
+        }
+
         if (!ggml_backend_sched_alloc_graph(sched, gf)) {
             // should never happen as we pre-allocate the memory
             return false;
+        }
+
+        // DEBUG: 检查 sched_alloc 后 conv 权重的 data 指针
+        {
+            auto it = wctx.model.tensors.find("encoder.conv1.weight");
+            if (it != wctx.model.tensors.end()) {
+                LOGD("AFTER sched_alloc: conv1.weight data=%p buffer=%p",
+                     it->second->data, (void*)it->second->buffer);
+            }
+            auto it2 = wctx.model.tensors.find("encoder.conv2.weight");
+            if (it2 != wctx.model.tensors.end()) {
+                LOGD("AFTER sched_alloc: conv2.weight data=%p buffer=%p",
+                     it2->second->data, (void*)it2->second->buffer);
+            }
         }
 
         struct ggml_tensor * mel = ggml_graph_get_tensor(gf, "mel");

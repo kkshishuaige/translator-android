@@ -31,6 +31,8 @@ set(GGML_BUILD_OPENCL OFF)
 set(GGML_BUILD_HEXAGON OFF)
 set(GGML_BUILD_VIRTGPU OFF)
 set(GGML_BUILD_OPENVINO OFF)
+# 禁用所有 CPU 优化（NEON/SIMD），解决部分设备上的指令崩溃
+add_definitions(-DGGML_FORCE_SCALAR_DOT_F16=1)
 add_subdirectory(ggml)
 
 # 链接
@@ -52,6 +54,7 @@ target_include_directories(whisper PRIVATE
 target_compile_definitions(whisper PRIVATE
     GGML_USE_CPU=1
     GGML_CPU_EXTRA_DISABLE=1
+    GGML_NO_CPU_OPTIMIZATIONS=1
     WHISPER_VERSION="${WHISPER_VERSION}"
 )
 
