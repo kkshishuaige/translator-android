@@ -7,18 +7,23 @@ package com.translator.app
 object WhisperModel {
     private var loaded = false
 
-    // JNI 方法
-    private external fun init(modelPath: String): Boolean
-    private external fun transcribe(audioData: FloatArray, lang: String): String
-    private external fun release()
-    private external fun isReady(): Boolean
+    // 加载 native 库（CMake 编译生成 libwhisper.so）
+    init {
+        System.loadLibrary("whisper")
+    }
+
+    // JNI 方法 - 使用 @JvmStatic 确保编译为静态方法
+    @JvmStatic private external fun nativeInit(modelPath: String): Boolean
+    @JvmStatic private external fun nativeTranscribe(audioData: FloatArray, lang: String): String
+    @JvmStatic private external fun nativeRelease()
+    @JvmStatic private external fun nativeIsReady(): Boolean
 
     /**
      * 加载模型
      */
     fun load(modelPath: String): Boolean {
         if (loaded) return true
-        loaded = init(modelPath)
+        loaded = nativeInit(modelPath)
         return loaded
     }
 
@@ -30,20 +35,20 @@ object WhisperModel {
      */
     fun transcribeAudio(audioData: FloatArray, lang: String = "auto"): String {
         if (!loaded) return ""
-        return transcribe(audioData, lang)
+        return nativeTranscribe(audioData, lang)
     }
 
     /**
      * 模型是否已加载
      */
-    fun isModelReady(): Boolean = loaded && isReady()
+    fun isModelReady(): Boolean = loaded && nativeIsReady()
 
     /**
      * 释放模型
      */
     fun unload() {
         if (loaded) {
-            release()
+            nativeRelease()
             loaded = false
         }
     }

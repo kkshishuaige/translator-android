@@ -16,10 +16,9 @@ extern "C" {
 
 /**
  * 初始化 Whisper 模型
- * modelPath: 模型文件路径（如 /sdcard/ggml-base.bin）
  */
 JNIEXPORT jboolean JNICALL
-Java_com_translator_app_WhisperModel_init(JNIEnv *env, jobject thiz, jstring modelPath) {
+Java_com_translator_app_WhisperModel_nativeInit(JNIEnv *env, jclass clazz, jstring modelPath) {
     if (g_ctx != nullptr) {
         whisper_free(g_ctx);
         g_ctx = nullptr;
@@ -29,8 +28,7 @@ Java_com_translator_app_WhisperModel_init(JNIEnv *env, jobject thiz, jstring mod
     LOGI("Loading model: %s", path);
 
     struct whisper_context_params cparams = whisper_context_default_params();
-    // Android 上用 CPU
-    cparams.use_gpu = false;
+    cparams.use_gpu = false;  // Android CPU only
 
     g_ctx = whisper_init_from_file_with_params(path, cparams);
 
@@ -47,13 +45,10 @@ Java_com_translator_app_WhisperModel_init(JNIEnv *env, jobject thiz, jstring mod
 
 /**
  * 转录音频 PCM 数据
- * audioData: 16kHz, 16-bit mono PCM 数据（float 数组，归一化到 [-1, 1]）
- * lang: 语言代码（"en", "zh", "ar", "ru", "es", "fr" 或 "auto"）
- * return: 识别出的文本
  */
 JNIEXPORT jstring JNICALL
-Java_com_translator_app_WhisperModel_transcribe(JNIEnv *env, jobject thiz,
-                                                  jfloatArray audioData, jstring lang) {
+Java_com_translator_app_WhisperModel_nativeTranscribe(JNIEnv *env, jclass clazz,
+                                                       jfloatArray audioData, jstring lang) {
     if (g_ctx == nullptr) {
         LOGE("Model not initialized");
         return env->NewStringUTF("");
@@ -80,7 +75,7 @@ Java_com_translator_app_WhisperModel_transcribe(JNIEnv *env, jobject thiz,
     wparams.tdrz_enable      = false;
 
     // 语言设置
-    if (strcmp(langStr, "auto") != 0 && strcmp(langStr, "") != 0) {
+    if (strcmp(langStr, "auto") != 0 && strlen(langStr) > 0) {
         wparams.language = langStr;
     } else {
         wparams.language = nullptr;  // 自动检测
@@ -116,7 +111,7 @@ Java_com_translator_app_WhisperModel_transcribe(JNIEnv *env, jobject thiz,
  * 释放模型
  */
 JNIEXPORT void JNICALL
-Java_com_translator_app_WhisperModel_release(JNIEnv *env, jobject thiz) {
+Java_com_translator_app_WhisperModel_nativeRelease(JNIEnv *env, jclass clazz) {
     if (g_ctx != nullptr) {
         whisper_free(g_ctx);
         g_ctx = nullptr;
@@ -128,7 +123,7 @@ Java_com_translator_app_WhisperModel_release(JNIEnv *env, jobject thiz) {
  * 获取模型是否就绪
  */
 JNIEXPORT jboolean JNICALL
-Java_com_translator_app_WhisperModel_isReady(JNIEnv *env, jobject thiz) {
+Java_com_translator_app_WhisperModel_nativeIsReady(JNIEnv *env, jclass clazz) {
     return (g_ctx != nullptr) ? JNI_TRUE : JNI_FALSE;
 }
 
