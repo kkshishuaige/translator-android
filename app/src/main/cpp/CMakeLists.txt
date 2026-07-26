@@ -21,6 +21,13 @@ endif()
 add_definitions(-DGGML_USE_CPU=1)
 add_definitions(-DGGML_CPU_EXTRA_DISABLE=1)
 
+# 版本宏定义
+target_compile_definitions(whisper PRIVATE
+    GGML_VERSION="0.16.0"
+    GGML_COMMIT="unknown"
+    WHISPER_VERSION="1.9.1"
+)
+
 # 源文件
 set(WHISPER_SOURCES
     whisper.cpp
